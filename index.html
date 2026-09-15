@@ -1039,6 +1039,7 @@ async function fetchTargeted(type, topicHint, fromHook){
 async function loadMore(){
   if(state.loading) return;
   state.loading = true;
+  renderHome();
   renderHomeSkeleton(true);
   try{
     const due = dueReviews(2).filter(item => !state.feed.some(c=>c.type==='review' && c.memKey===normKey(item.term)));
@@ -1181,11 +1182,24 @@ function renderHome(){
   el.appendChild(topbar);
   el.appendChild(renderMissionHero());
 
-  if(state.feed.length===0 && !state.loading){
+  if(state.feed.length===0){
     const empty = document.createElement('div'); empty.className='empty-full';
+    if(state.loading){
+      empty.innerHTML = '<h3>Loading your first cards\u2026</h3><p>This can take 20\u201330 seconds \u2014 hang tight, this screen will update when it\u2019s done.</p>';
+      el.appendChild(empty);
+      return;
+    }
+    if(state.error){
+      empty.innerHTML = '<h3 style="color:var(--red)">Could not load cards</h3><p style="color:var(--red)">'+state.error+'</p>';
+      const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Try again';
+      btn.onclick = ()=>{ state.error=null; loadMore(); };
+      empty.appendChild(btn);
+      el.appendChild(empty);
+      return;
+    }
     empty.innerHTML = '<h3>Nothing loaded yet</h3><p>Tap below to bring in your first cards.</p>';
     const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Load cards';
-    btn.onclick = ()=>{ btn.disabled=true; btn.textContent='Loading\u2026 (can take 20-30s)'; loadMore(); };
+    btn.onclick = loadMore;
     empty.appendChild(btn);
     el.appendChild(empty);
     return;
