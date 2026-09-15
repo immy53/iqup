@@ -812,19 +812,28 @@ function applyConceptApplication(card, correct){
 }
 function topAffinities(n){ return Object.entries(state.affinity).sort((a,b)=>b[1]-a[1]).slice(0,n).map(e=>e[0]); }
 
+async function fetchWithTimeout(url, options, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), ms);
+  try{
+    return await fetch(url, {...options, signal:controller.signal});
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function callClaude(system, userText, maxTokens){
   const body = JSON.stringify({ model:"claude-sonnet-5", max_tokens: maxTokens || 1000, system: system, messages:[{role:"user", content:userText}] });
   let primaryErr = null;
   try{
-    const r = await fetch('/.netlify/functions/claude', { method:"POST", headers:{"Content-Type":"application/json"}, body });
+    const r = await fetchWithTimeout('/.netlify/functions/claude', { method:"POST", headers:{"Content-Type":"application/json"}, body }, 20000);
     const data = await r.json().catch(()=>null);
     if(r.ok && data){
       return (data.content||[]).map(b=>b.text||"").join("\n");
     }
     primaryErr = (data && data.error && (data.error.message || JSON.stringify(data.error))) || ('HTTP '+r.status);
-  }catch(e){ primaryErr = e.message; }
+  }catch(e){ primaryErr = e.name==='AbortError' ? 'Request timed out after 20s (function may be cold-starting or hanging)' : e.message; }
   try{
-    const response = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body });
+    const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body }, 8000);
     const data2 = await response.json().catch(()=>null);
     if(response.ok && data2){
       return (data2.content||[]).map(b=>b.text||"").join("\n");
@@ -1175,7 +1184,8 @@ function renderHome(){
   if(state.feed.length===0 && !state.loading){
     const empty = document.createElement('div'); empty.className='empty-full';
     empty.innerHTML = '<h3>Nothing loaded yet</h3><p>Tap below to bring in your first cards.</p>';
-    const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Load cards'; btn.onclick = loadMore;
+    const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Load cards';
+    btn.onclick = ()=>{ btn.disabled=true; btn.textContent='Loading\u2026 (can take 20-30s)'; loadMore(); };
     empty.appendChild(btn);
     el.appendChild(empty);
     return;
