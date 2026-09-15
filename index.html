@@ -350,6 +350,7 @@ const TYPE_META = {
 };
 const RARITY_TIERS = ['Common','Uncommon','Rare','Epic','Legendary'];
 const RARITY_COLOR = {Common:'var(--text-soft)', Uncommon:'var(--green)', Rare:'var(--blue)', Epic:'var(--purple)', Legendary:'var(--gold)'};
+const RARITY_GLOW = {Common:'rgba(156,152,174,0.16)', Uncommon:'var(--green-tint)', Rare:'var(--blue-tint)', Epic:'var(--purple-tint)', Legendary:'var(--gold-tint)'};
 function computeRarity(difficulty, importance, depth){
   const d = difficulty||3, i = importance||3, dp = depth||3;
   const score = d + dp - i;
@@ -389,6 +390,8 @@ const EXPLORE_TILES = [
   {id:'domain:Create', label:'Create', hint:'Writing, design, music, storytelling, innovation', color:'#FF9ECD', glow:'rgba(255,158,205,0.16)'},
   {id:'domain:General', label:'General', hint:'Anything fascinating that doesn\u2019t fit elsewhere', color:'#9C98AE', glow:'rgba(156,152,174,0.16)'},
 ];
+const DOMAIN_GLOW = {};
+EXPLORE_TILES.forEach(t=>{ if(t.id.startsWith('domain:')) DOMAIN_GLOW[t.id.slice(7)] = t.glow; });
 
 const DOMAIN_TOPIC_LIST = {
   Money: 'personal finance, investing, economics, business, entrepreneurship, careers, negotiation, marketing, wealth, real estate',
@@ -457,6 +460,8 @@ let state = {
   recentAnswers:[],
   customCollections:[],
   pendingKnowledge:{}, interactionCount:0,
+  frenchLevelStats: {beginner:{correct:0,total:0}, intermediate:{correct:0,total:0}, advanced:{correct:0,total:0}},
+  frenchLevelUpDismissed: {},
   loading:false, error:null,
 };
 
@@ -549,6 +554,21 @@ async function triggerBossBattle(domain){
 
 function bumpAffinity(category, amount){ if(!category) return; state.affinity[category] = (state.affinity[category]||0) + amount; persistProgress(); checkKnowledgeMapMastery(); }
 
+function trackFrenchLevelProgress(correct){
+  const level = state.frenchLevel;
+  if(!state.frenchLevelStats[level]) state.frenchLevelStats[level] = {correct:0, total:0};
+  const s = state.frenchLevelStats[level];
+  s.total += 1;
+  if(correct) s.correct += 1;
+  persist('french-level-stats', state.frenchLevelStats);
+  const order = ['beginner','intermediate','advanced'];
+  const idx = order.indexOf(level);
+  if(idx>=0 && idx<order.length-1 && s.total>=8 && (s.correct/s.total)>=0.8 && !state.frenchLevelUpDismissed[level]){
+    const nextLevel = order[idx+1];
+    showToast('\ud83c\udde3\ud83c\uddf7 ' + Math.round((s.correct/s.total)*100) + '% at ' + DIFF_LABELS[level] + ' \u2014 try ' + DIFF_LABELS[nextLevel] + '? Switch anytime in Explore.');
+    state.frenchLevelUpDismissed[level] = true;
+  }
+}
 function bumpInteraction(){
   state.interactionCount += 1;
   persist('interaction-count', state.interactionCount);
@@ -881,7 +901,7 @@ function extractCompleteObjects(text){
 
 async function loadStorage(){
   try{
-    const keys = ['feed','saved-cards','seen-titles','streak','xp-data','french-level','selected-categories','daily-progress','mastered-domains','memory-bank','memory-stats','focus-best','recent-answers','custom-collections','pending-knowledge','interaction-count'];
+    const keys = ['feed','saved-cards','seen-titles','streak','xp-data','french-level','selected-categories','daily-progress','mastered-domains','memory-bank','memory-stats','focus-best','recent-answers','custom-collections','pending-knowledge','interaction-count','french-level-stats'];
     const results = await Promise.allSettled(keys.map(k=>window.storage.get(k)));
     if(results[0].status==='fulfilled' && results[0].value) state.feed = JSON.parse(results[0].value.value);
     if(results[1].status==='fulfilled' && results[1].value) state.saved = JSON.parse(results[1].value.value);
@@ -911,6 +931,7 @@ async function loadStorage(){
     if(results[13].status==='fulfilled' && results[13].value) state.customCollections = JSON.parse(results[13].value.value);
     if(results[14].status==='fulfilled' && results[14].value) state.pendingKnowledge = JSON.parse(results[14].value.value);
     if(results[15].status==='fulfilled' && results[15].value) state.interactionCount = JSON.parse(results[15].value.value);
+    if(results[16].status==='fulfilled' && results[16].value) state.frenchLevelStats = JSON.parse(results[16].value.value);
   }catch(e){}
 }
 async function persist(key, value){ try{ await window.storage.set(key, JSON.stringify(value)); }catch(e){} }
@@ -1376,6 +1397,7 @@ function buildFrenchBody(card, wrap){
         state.frenchChecks += 1;
         bumpDaily('french');
         recordAnswer(parsed.isCorrect);
+        trackFrenchLevelProgress(parsed.isCorrect);
         if(parsed.isCorrect){
           const term = isTranslate ? card.sourceText : card.word;
           markLearned(term, 'French', card.meaning, null);
@@ -1555,6 +1577,63 @@ function renderOverlay(){
   } else if(state.overlayView==='memory-review'){
     title.textContent = 'Memory Review';
     renderMemoryReviewOverlay(body);
+  } else if(state.overlayView==='rarity-drill'){
+    renderRarityDrillOverlay(body);
+  }
+}
+function renderRarityDrillOverlay(body){
+  const tier = state.overlayData.tier;
+  const domain = state.overlayData.domain;
+  document.getElementById('overlay-title').textContent = tier;
+  const bankValues = Object.values(state.memoryBank);
+  const tierItems = bankValues.filter(m=>m.rarity===tier);
+
+  if(!domain){
+    const head = document.createElement('p'); head.style.color='var(--text-soft)'; head.style.fontSize='0.85rem'; head.style.margin='0 0 1rem';
+    head.textContent = tierItems.length + ' ' + tier.toLowerCase() + ' concept' + (tierItems.length===1?'':'s') + ' \u2014 tap a category to see them';
+    body.appendChild(head);
+    const domainCounts = [];
+    KNOWLEDGE_MAP.forEach(d=>{
+      const n = tierItems.filter(m=> d.id==='General' ? inGeneralBucket(m.category) : itemMatchesDomain(m.category, d)).length;
+      if(n>0) domainCounts.push({label:d.id, color:d.color, glow:DOMAIN_GLOW[d.id]||'rgba(156,152,174,0.16)', count:n, ref:{kind:'domain', id:d.id}});
+    });
+    state.customCollections.forEach(cat=>{
+      const n = tierItems.filter(m=>(m.category||'').toLowerCase()===cat.toLowerCase()).length;
+      if(n>0) domainCounts.push({label:'\ud83c\udf10 '+cat, color:'#9C98AE', glow:'rgba(156,152,174,0.16)', count:n, ref:{kind:'custom', name:cat}});
+    });
+    if(domainCounts.length===0){
+      const p = document.createElement('p'); p.style.color='var(--text-soft)'; p.style.fontSize='0.85rem'; p.textContent = 'Nothing here yet.';
+      body.appendChild(p);
+    } else {
+      domainCounts.forEach(dc=>{
+        const row = document.createElement('div'); row.className='memory-due-tile';
+        row.style.background = 'radial-gradient(circle at 75% 15%, '+dc.glow+', transparent 60%), var(--surface)';
+        row.innerHTML = '<span class="memory-due-dot" style="background:'+dc.color+'"></span><div style="flex:1"><div class="hub-title" style="font-size:0.92rem">'+dc.label+'</div></div><div style="color:var(--text-soft);font-size:0.85rem">'+dc.count+' \u203a</div>';
+        row.onclick = ()=>{ state.overlayData.domain = dc.ref; renderOverlay(); };
+        body.appendChild(row);
+      });
+    }
+  } else {
+    const domainDef = domain.kind==='domain' ? KNOWLEDGE_MAP.find(d=>d.id===domain.id) : null;
+    const label = domain.kind==='custom' ? ('\ud83c\udf10 '+domain.name) : domain.id;
+    const items = tierItems.filter(m=>{
+      if(domain.kind==='custom') return (m.category||'').toLowerCase()===domain.name.toLowerCase();
+      return domain.id==='General' ? inGeneralBucket(m.category) : itemMatchesDomain(m.category, domainDef);
+    });
+    const backRow = document.createElement('p'); backRow.style.fontSize='0.85rem'; backRow.style.color='var(--blue)'; backRow.style.margin='0 0 1rem'; backRow.style.cursor='pointer';
+    backRow.textContent = '\u2039 All ' + tier + ' categories';
+    backRow.onclick = ()=>{ state.overlayData.domain = null; renderOverlay(); };
+    body.appendChild(backRow);
+    const head = document.createElement('p'); head.style.fontWeight='700'; head.style.margin='0 0 0.8rem'; head.textContent = label + ' \u2014 ' + items.length;
+    body.appendChild(head);
+    const tierGlowColor = RARITY_COLOR[tier];
+    const tierGlow = RARITY_GLOW[tier];
+    items.sort((a,b)=>b.mastery-a.mastery).forEach(it=>{
+      const row = document.createElement('div'); row.className='memory-due-tile'; row.style.cursor='default';
+      row.style.background = 'radial-gradient(circle at 75% 15%, '+tierGlow+', transparent 60%), var(--surface)';
+      row.innerHTML = '<span class="memory-due-dot" style="background:'+tierGlowColor+'"></span><div style="flex:1"><div class="hub-title" style="font-size:0.92rem">'+it.term+'</div></div><div style="color:var(--text-soft);font-size:0.85rem">'+stageOf(it.mastery)+' \u00b7 '+it.mastery+'%</div>';
+      body.appendChild(row);
+    });
   }
 }
 
@@ -2246,6 +2325,15 @@ function renderExplore(){
       levelRow.appendChild(b);
     });
     frSection.appendChild(levelRow);
+    const curStats = state.frenchLevelStats[state.frenchLevel] || {correct:0,total:0};
+    const statsP = document.createElement('p'); statsP.style.fontSize='0.8rem'; statsP.style.color='var(--text-soft)'; statsP.style.margin='0.6rem 0 0';
+    if(curStats.total===0){
+      statsP.textContent = 'No sentences checked yet at ' + DIFF_LABELS[state.frenchLevel] + '.';
+    } else {
+      const pct = Math.round((curStats.correct/curStats.total)*100);
+      statsP.textContent = DIFF_LABELS[state.frenchLevel] + ': ' + curStats.correct + '/' + curStats.total + ' correct (' + pct + '%)' + (pct>=80 && curStats.total>=8 ? ' \u2014 you\u2019ve earned the next level' : '');
+    }
+    frSection.appendChild(statsP);
     el.appendChild(frSection);
   }
 
@@ -2306,32 +2394,7 @@ async function launchTargetedApplication(item){
 }
 function renderChallenge(){
   const el = document.getElementById('view-challenge');
-  el.innerHTML = '<p class="explore-title display">\u26a1 Challenge</p><p class="explore-sub">Tests concepts you\u2019ve already earned in Memory \u2014 the more you have, the more this can do.</p>';
-
-  const bankValues = Object.values(state.memoryBank);
-  const readyItems = bankValues.filter(m=>m.mastery<100).sort((a,b)=>a.mastery-b.mastery);
-  const readyTitle = document.createElement('p'); readyTitle.style.fontWeight='700'; readyTitle.style.margin='1rem 0 0.6rem'; readyTitle.textContent = 'Ready to Challenge (' + readyItems.length + ')';
-  el.appendChild(readyTitle);
-  if(readyItems.length===0){
-    const p = document.createElement('p'); p.style.color='var(--text-soft)'; p.style.fontSize='0.85rem'; p.style.marginBottom='1.2rem';
-    p.textContent = 'Nothing here yet. Earn a concept on Home first (get something right, then right again when it comes back) \u2014 it\u2019ll show up here ready to test.';
-    el.appendChild(p);
-  } else {
-    readyItems.slice(0,10).forEach(item=>{
-      const row = document.createElement('div'); row.className='memory-due-tile';
-      row.innerHTML = '<span class="memory-due-dot" style="background:'+RARITY_COLOR[item.rarity]+'"></span><div style="flex:1"><div class="hub-title" style="font-size:0.92rem">'+item.term+'</div><div class="hub-sub">'+item.category+' \u00b7 '+item.mastery+'% mastery</div></div>';
-      row.onclick = ()=>launchTargetedApplication(item);
-      el.appendChild(row);
-    });
-    if(readyItems.length>10){
-      const more = document.createElement('p'); more.style.fontSize='0.78rem'; more.style.color='var(--text-soft)'; more.style.margin='0 0 1rem';
-      more.textContent = '+' + (readyItems.length-10) + ' more \u2014 try one of the formats below for a random pick';
-      el.appendChild(more);
-    }
-  }
-
-  const orTitle = document.createElement('p'); orTitle.style.fontWeight='700'; orTitle.style.margin='1.3rem 0 0.6rem'; orTitle.textContent = 'Or Try a Fresh One';
-  el.appendChild(orTitle);
+  el.innerHTML = '<p class="explore-title display">\u26a1 Challenge</p><p class="explore-sub">Test yourself on what you already know.</p>';
   CHALLENGE_MENU.forEach(item=>{
     const tile = document.createElement('div'); tile.className='hub-tile';
     tile.innerHTML = '<span class="hub-icon">'+item.icon+'</span><div><div class="hub-title">'+item.title+'</div><div class="hub-sub">'+item.sub+'</div></div>';
@@ -2353,7 +2416,8 @@ function renderChallenge(){
 }
 
 /* ---------------- MEMORY ---------------- */
-let expandedRarityTier = null;
+let selectedRarityTier = null;
+let selectedRarityDomain = null;
 function renderMemory(){
   const el = document.getElementById('view-memory');
   el.innerHTML = '<p class="explore-title display">\ud83e\udde0 Memory</p>';
@@ -2374,36 +2438,6 @@ function renderMemory(){
     });
   }
 
-  const collTitle = document.createElement('p'); collTitle.style.fontWeight='700'; collTitle.style.margin='1.3rem 0 0.6rem'; collTitle.textContent = 'Your Collection';
-  el.appendChild(collTitle);
-  const bankValues = Object.values(state.memoryBank);
-  RARITY_TIERS.forEach(tier=>{
-    const items = bankValues.filter(m=>m.rarity===tier);
-    const collected = state.collectedTiers.includes(tier);
-    const streak = state.rarityStreak[tier]||0;
-    const box = document.createElement('div'); box.style.marginBottom='0.6rem'; box.style.background='var(--surface)'; box.style.border='1px solid var(--border)'; box.style.borderRadius='14px'; box.style.overflow='hidden';
-    const head = document.createElement('div'); head.style.padding='0.8rem 1rem'; head.style.display='flex'; head.style.justifyContent='space-between'; head.style.alignItems='center'; head.style.cursor='pointer';
-    head.innerHTML = '<span style="font-weight:700;color:'+RARITY_COLOR[tier]+'">'+tier+' ('+items.length+')</span><span style="font-size:0.78rem;color:var(--text-soft)">'+(collected?'\u2713 Collected':streak+'/3 to collect')+'</span>';
-    head.onclick = ()=>{ expandedRarityTier = expandedRarityTier===tier ? null : tier; renderMemory(); };
-    box.appendChild(head);
-    if(expandedRarityTier===tier){
-      if(items.length===0){
-        const p = document.createElement('p'); p.style.padding='0 1rem 0.8rem'; p.style.color='var(--text-soft)'; p.style.fontSize='0.82rem'; p.style.margin='0'; p.textContent = 'No '+tier.toLowerCase()+' concepts yet.';
-        box.appendChild(p);
-      } else {
-        items.sort((a,b)=>b.mastery-a.mastery).forEach(it=>{
-          const row = document.createElement('div'); row.style.padding='0.5rem 1rem'; row.style.borderTop='1px solid var(--border)'; row.style.display='flex'; row.style.justifyContent='space-between'; row.style.fontSize='0.85rem';
-          row.innerHTML = '<span>'+it.term+'</span><span style="color:var(--text-soft)">'+stageOf(it.mastery)+' \u00b7 '+it.mastery+'%</span>';
-          box.appendChild(row);
-        });
-      }
-      const note = document.createElement('p'); note.style.padding='0.6rem 1rem 0.8rem'; note.style.fontSize='0.76rem'; note.style.color='var(--text-soft)'; note.style.margin='0';
-      note.textContent = collected ? 'Permanently collected \u2014 nice.' : 'Answer 3 '+tier.toLowerCase()+' cards correctly in a row (Memory review, Challenge, or Home) to collect this tier.';
-      box.appendChild(note);
-    }
-    el.appendChild(box);
-  });
-
   const now = Date.now();
   const tomorrow = Object.values(state.memoryBank).filter(m=>m.nextReview>now && m.nextReview<=now+86400000).length;
   const week = Object.values(state.memoryBank).filter(m=>m.nextReview>now+86400000 && m.nextReview<=now+7*86400000).length;
@@ -2417,6 +2451,20 @@ function renderMemory(){
     comingGrid.appendChild(box);
   });
   el.appendChild(comingGrid);
+
+  const rarityTitle = document.createElement('p'); rarityTitle.style.fontWeight='700'; rarityTitle.style.margin='1.2rem 0 0.6rem'; rarityTitle.textContent = 'By Rarity';
+  el.appendChild(rarityTitle);
+  const bankValues = Object.values(state.memoryBank);
+  const rarityGrid = document.createElement('div'); rarityGrid.className='stat-grid';
+  RARITY_TIERS.forEach(tier=>{
+    const count = bankValues.filter(m=>m.rarity===tier).length;
+    const box = document.createElement('div'); box.className='stat-box'; box.style.cursor='pointer';
+    box.style.background = 'radial-gradient(circle at 75% 15%, '+RARITY_GLOW[tier]+', transparent 60%), var(--surface)';
+    box.innerHTML = '<div class="num" style="color:'+RARITY_COLOR[tier]+'">'+count+'</div><div class="lbl">'+tier+'</div>';
+    box.onclick = ()=>openOverlay('rarity-drill', {tier, domain:null});
+    rarityGrid.appendChild(box);
+  });
+  el.appendChild(rarityGrid);
 
   const knowTitle = document.createElement('p'); knowTitle.style.fontWeight='700'; knowTitle.style.margin='1.4rem 0 0.6rem'; knowTitle.textContent = 'Your Knowledge';
   el.appendChild(knowTitle);
