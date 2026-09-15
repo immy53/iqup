@@ -821,7 +821,7 @@ function timeoutRejection(ms){
 async function fetchWithTimeout(url, options, ms){
   return Promise.race([ fetch(url, options), timeoutRejection(ms) ]);
 }
-async function callClaude(system, userText, maxTokens){
+async function callClaudeInner(system, userText, maxTokens){
   const body = JSON.stringify({ model:"claude-sonnet-5", max_tokens: maxTokens || 1000, system: system, messages:[{role:"user", content:userText}] });
   let primaryErr = null;
   try{
@@ -843,6 +843,13 @@ async function callClaude(system, userText, maxTokens){
   }catch(e2){
     throw new Error(primaryErr || e2.message || 'Unknown error contacting Claude');
   }
+}
+let networkQueue = Promise.resolve();
+function callClaude(system, userText, maxTokens){
+  const task = () => callClaudeInner(system, userText, maxTokens);
+  const run = networkQueue.then(task, task);
+  networkQueue = run.then(()=>{}, ()=>{});
+  return run;
 }
 function stripFence(text){ return text.replace(/```json/gi,"").replace(/```/g,"").trim(); }
 function extractJsonArray(text){
