@@ -1059,61 +1059,14 @@ async function fetchTargeted(type, topicHint, fromHook){
 
 async function loadMore(count, includeExtras){
   if(state.loading) return;
-  count = count || 3;
+  count = count || 2;
   includeExtras = includeExtras===undefined ? true : includeExtras;
   state.loading = true;
   renderHome();
   renderHomeSkeleton(true);
   try{
-    let reviewCardPromises = [], connectPromise = Promise.resolve(null), synthesisPromise = Promise.resolve(null), applicationPromise = Promise.resolve(null), pendingRecallPromise = Promise.resolve(null);
-
-    if(includeExtras){
-      const due = dueReviews(2).filter(item => !state.feed.some(c=>c.type==='review' && c.memKey===normKey(item.term)));
-      reviewCardPromises = due.map(item => fetchReviewPrompt(item).then(promptData=>({
-        id: uid(), type:'review', memKey: normKey(item.term), term:item.term, category:item.category,
-        mastery:item.mastery, rarity:item.rarity, promptData
-      })).catch(()=>null));
-
-      const alreadyHasConnect = state.feed.some(c=>c.type==='connect');
-      const pair = (!alreadyHasConnect && Math.random()<0.35) ? findConnectPair() : null;
-      connectPromise = pair ? fetchConnectPrompt(pair.itemA, pair.itemB).then(promptData=>({
-        id: uid(), type:'connect', keyA: pair.itemA.key, keyB: pair.itemB.key,
-        termA: pair.itemA.term, termB: pair.itemB.term, category: pair.itemA.category, promptData
-      })).catch(()=>null) : Promise.resolve(null);
-
-      const alreadyHasSynthesis = state.feed.some(c=>c.type==='create' && c.concept);
-      const bankValues = Object.values(state.memoryBank);
-      const synthesisConcept = (!alreadyHasSynthesis && bankValues.length>0 && Math.random()<0.3) ? bankValues[Math.floor(Math.random()*bankValues.length)] : null;
-      synthesisPromise = synthesisConcept ? fetchTargeted('create', 'a Writing, Design, Music, Storytelling, Photography, or Innovation task that applies this specific concept the learner already knows: "'+synthesisConcept.term+'" ('+synthesisConcept.definition+')', '').catch(()=>null) : Promise.resolve(null);
-
-      const alreadyHasApplication = state.feed.some(c=>c.appliesConceptKey);
-      const applyCandidates = bankValues.filter(m=>m.mastery<100);
-      const applyItem = (!alreadyHasApplication && applyCandidates.length>0 && Math.random()<0.35) ? applyCandidates[Math.floor(Math.random()*applyCandidates.length)] : null;
-      const applyType = ['trivia','mystery','versus'][Math.floor(Math.random()*3)];
-      applicationPromise = applyItem ? fetchTargeted(applyType, 'a question that requires the learner to APPLY or IDENTIFY this concept in a new, different situation \u2014 not just define it: "'+applyItem.term+'" ('+applyItem.definition+')', '').then(card=>{
-        card.appliesConceptKey = normKey(applyItem.term);
-        card.appliesConceptTerm = applyItem.term;
-        return card;
-      }).catch(()=>null) : Promise.resolve(null);
-
-      const alreadyHasPendingRecall = state.feed.some(c=>c.type==='pendingRecall');
-      const eligiblePending = Object.entries(state.pendingKnowledge).filter(([k,item])=> (state.interactionCount - item.addedAt) >= item.dueIn);
-      const pendingItem = (!alreadyHasPendingRecall && eligiblePending.length>0) ? {key:eligiblePending[0][0], ...eligiblePending[0][1]} : null;
-      pendingRecallPromise = pendingItem ? fetchPendingRecallPrompt(pendingItem).then(promptData=>({
-        id: uid(), type:'pendingRecall', pendingKey: pendingItem.key, term: pendingItem.term, category: pendingItem.category,
-        definition: pendingItem.definition, rarity: pendingItem.rarity, promptData
-      })).catch(()=>null) : Promise.resolve(null);
-    }
-
-    const [cards, reviewCardsRaw, connectCard, synthesisCard, applicationCard, pendingRecallCard] = await Promise.all([fetchBatch(count), Promise.all(reviewCardPromises), connectPromise, synthesisPromise, applicationPromise, pendingRecallPromise]);
-    const reviewCards = reviewCardsRaw.filter(Boolean);
-    if(connectCard) reviewCards.push(connectCard);
-    if(synthesisCard) reviewCards.push(synthesisCard);
-    if(applicationCard) reviewCards.push(applicationCard);
-    if(pendingRecallCard) reviewCards.push(pendingRecallCard);
-    const merged = cards.slice();
-    reviewCards.forEach((rc,i)=> merged.splice(Math.min(1+i*2, merged.length), 0, rc));
-    state.feed = state.feed.concat(merged);
+    const cards = await fetchBatch(count);
+    state.feed = state.feed.concat(cards);
     cards.forEach(c=>{ const label = c.word || c.hook; if(label) state.seenTitles.push(label); });
     state.seenTitles = state.seenTitles.slice(-300);
     persist('feed', state.feed.slice(-80));
@@ -1122,6 +1075,66 @@ async function loadMore(count, includeExtras){
   }catch(e){ state.error = (e && e.message) ? e.message : 'Could not load new cards.'; }
   state.loading = false;
   renderHome();
+  if(includeExtras && !state.error) fetchBonusCardsSequential(2);
+}
+
+async function fetchOneBonusCard(){
+  try{
+    const due = dueReviews(2).filter(item => !state.feed.some(c=>c.type==='review' && c.memKey===normKey(item.term)));
+    const alreadyHasConnect = state.feed.some(c=>c.type==='connect');
+    const pair = alreadyHasConnect ? null : findConnectPair();
+    const bankValues = Object.values(state.memoryBank);
+    const alreadyHasSynthesis = state.feed.some(c=>c.type==='create' && c.concept);
+    const alreadyHasApplication = state.feed.some(c=>c.appliesConceptKey);
+    const applyCandidates = bankValues.filter(m=>m.mastery<100);
+    const alreadyHasPendingRecall = state.feed.some(c=>c.type==='pendingRecall');
+    const eligiblePending = Object.entries(state.pendingKnowledge).filter(([k,item])=> (state.interactionCount - item.addedAt) >= item.dueIn);
+
+    const options = [];
+    if(due.length) options.push('review');
+    if(pair) options.push('connect');
+    if(!alreadyHasSynthesis && bankValues.length>0) options.push('synthesis');
+    if(!alreadyHasApplication && applyCandidates.length>0) options.push('application');
+    if(!alreadyHasPendingRecall && eligiblePending.length>0) options.push('pendingRecall');
+    if(options.length===0) return false;
+    const chosen = options[Math.floor(Math.random()*options.length)];
+
+    let card = null;
+    if(chosen==='review'){
+      const item = due[0];
+      const promptData = await fetchReviewPrompt(item);
+      card = { id: uid(), type:'review', memKey: normKey(item.term), term:item.term, category:item.category, mastery:item.mastery, rarity:item.rarity, promptData };
+    } else if(chosen==='connect'){
+      const promptData = await fetchConnectPrompt(pair.itemA, pair.itemB);
+      card = { id: uid(), type:'connect', keyA: pair.itemA.key, keyB: pair.itemB.key, termA: pair.itemA.term, termB: pair.itemB.term, category: pair.itemA.category, promptData };
+    } else if(chosen==='synthesis'){
+      const item = bankValues[Math.floor(Math.random()*bankValues.length)];
+      card = await fetchTargeted('create', 'a Writing, Design, Music, Storytelling, Photography, or Innovation task that applies this specific concept the learner already knows: "'+item.term+'" ('+item.definition+')', '');
+    } else if(chosen==='application'){
+      const item = applyCandidates[Math.floor(Math.random()*applyCandidates.length)];
+      const applyType = ['trivia','mystery','versus'][Math.floor(Math.random()*3)];
+      card = await fetchTargeted(applyType, 'a question that requires the learner to APPLY or IDENTIFY this concept in a new, different situation \u2014 not just define it: "'+item.term+'" ('+item.definition+')', '');
+      card.appliesConceptKey = normKey(item.term);
+      card.appliesConceptTerm = item.term;
+    } else if(chosen==='pendingRecall'){
+      const [key,item] = eligiblePending[0];
+      const promptData = await fetchPendingRecallPrompt(item);
+      card = { id: uid(), type:'pendingRecall', pendingKey: key, term: item.term, category: item.category, definition: item.definition, rarity: item.rarity, promptData };
+    }
+    if(card){
+      state.feed.push(card);
+      persist('feed', state.feed.slice(-80));
+      if(state.view==='home' && !state.overlayView && !state.loading) renderHome();
+      return true;
+    }
+    return false;
+  }catch(e){ return false; }
+}
+async function fetchBonusCardsSequential(maxCount){
+  for(let i=0;i<(maxCount||2);i++){
+    const gotOne = await fetchOneBonusCard();
+    if(!gotOne) break;
+  }
 }
 
 /* ---------------- HOME (immersive feed) ---------------- */
