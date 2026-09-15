@@ -2281,19 +2281,63 @@ async function launchChallenge(type){
     });
   }catch(e){ showToast('Could not load a challenge, try again'); }
 }
+async function launchTargetedApplication(item){
+  showToast('Building a challenge on '+item.term+'\u2026');
+  try{
+    const applyType = ['trivia','mystery','versus'][Math.floor(Math.random()*3)];
+    const card = await fetchTargeted(applyType, 'a question that requires the learner to APPLY or IDENTIFY this concept in a new, different situation \u2014 not just define it: "'+item.term+'" ('+item.definition+')', '');
+    card.appliesConceptKey = normKey(item.term);
+    card.appliesConceptTerm = item.term;
+    state.feed.push(card);
+    persist('feed', state.feed.slice(-80));
+    switchView('home');
+    requestAnimationFrame(()=>{
+      const el2 = [...document.querySelectorAll('.snap-card')].find(e=>e.dataset.id===card.id);
+      if(el2) el2.scrollIntoView({behavior:'smooth'});
+    });
+  }catch(e){ showToast('Could not build that challenge, try again'); }
+}
 function renderChallenge(){
   const el = document.getElementById('view-challenge');
-  el.innerHTML = '<p class="explore-title display">\u26a1 Challenge</p><p class="explore-sub">Test yourself on what you already know.</p>';
+  el.innerHTML = '<p class="explore-title display">\u26a1 Challenge</p><p class="explore-sub">Tests concepts you\u2019ve already earned in Memory \u2014 the more you have, the more this can do.</p>';
+
+  const bankValues = Object.values(state.memoryBank);
+  const readyItems = bankValues.filter(m=>m.mastery<100).sort((a,b)=>a.mastery-b.mastery);
+  const readyTitle = document.createElement('p'); readyTitle.style.fontWeight='700'; readyTitle.style.margin='1rem 0 0.6rem'; readyTitle.textContent = 'Ready to Challenge (' + readyItems.length + ')';
+  el.appendChild(readyTitle);
+  if(readyItems.length===0){
+    const p = document.createElement('p'); p.style.color='var(--text-soft)'; p.style.fontSize='0.85rem'; p.style.marginBottom='1.2rem';
+    p.textContent = 'Nothing here yet. Earn a concept on Home first (get something right, then right again when it comes back) \u2014 it\u2019ll show up here ready to test.';
+    el.appendChild(p);
+  } else {
+    readyItems.slice(0,10).forEach(item=>{
+      const row = document.createElement('div'); row.className='memory-due-tile';
+      row.innerHTML = '<span class="memory-due-dot" style="background:'+RARITY_COLOR[item.rarity]+'"></span><div style="flex:1"><div class="hub-title" style="font-size:0.92rem">'+item.term+'</div><div class="hub-sub">'+item.category+' \u00b7 '+item.mastery+'% mastery</div></div>';
+      row.onclick = ()=>launchTargetedApplication(item);
+      el.appendChild(row);
+    });
+    if(readyItems.length>10){
+      const more = document.createElement('p'); more.style.fontSize='0.78rem'; more.style.color='var(--text-soft)'; more.style.margin='0 0 1rem';
+      more.textContent = '+' + (readyItems.length-10) + ' more \u2014 try one of the formats below for a random pick';
+      el.appendChild(more);
+    }
+  }
+
+  const orTitle = document.createElement('p'); orTitle.style.fontWeight='700'; orTitle.style.margin='1.3rem 0 0.6rem'; orTitle.textContent = 'Or Try a Fresh One';
+  el.appendChild(orTitle);
   CHALLENGE_MENU.forEach(item=>{
     const tile = document.createElement('div'); tile.className='hub-tile';
     tile.innerHTML = '<span class="hub-icon">'+item.icon+'</span><div><div class="hub-title">'+item.title+'</div><div class="hub-sub">'+item.sub+'</div></div>';
     tile.onclick = ()=>launchChallenge(item.type);
     el.appendChild(tile);
   });
+
   const eligibleBoss = KNOWLEDGE_MAP.filter(d=>{ const a = domainMasteryAvg(d); return tierFromMastery(a)==='gold' && a.count>=3; });
   const bossTile = document.createElement('div'); bossTile.className='hub-tile'+(eligibleBoss.length===0?' locked':'');
   if(eligibleBoss.length===0){
-    bossTile.innerHTML = '<span class="hub-icon">\ud83c\udfc6</span><div><div class="hub-title">Boss Battle</div><div class="hub-sub">Master a domain in Memory to unlock</div></div>';
+    const closest = KNOWLEDGE_MAP.map(d=>({d, a:domainMasteryAvg(d)})).filter(x=>x.a.count>0).sort((a,b)=>b.a.avg-a.a.avg)[0];
+    const hint = closest ? closest.d.id+': '+closest.a.count+' concept'+(closest.a.count===1?'':'s')+', '+closest.a.avg+'% avg mastery (needs 3 concepts + 70%+ avg in one domain)' : 'Earn a few concepts in one domain to unlock this';
+    bossTile.innerHTML = '<span class="hub-icon">\ud83c\udfc6</span><div><div class="hub-title">Boss Battle</div><div class="hub-sub">'+hint+'</div></div>';
   } else {
     bossTile.innerHTML = '<span class="hub-icon">\ud83c\udfc6</span><div><div class="hub-title">Boss Battle</div><div class="hub-sub">Test everything you know about '+eligibleBoss[0].id+'</div></div>';
     bossTile.onclick = ()=>launchChallenge('boss');
@@ -2302,6 +2346,7 @@ function renderChallenge(){
 }
 
 /* ---------------- MEMORY ---------------- */
+let expandedRarityTier = null;
 function renderMemory(){
   const el = document.getElementById('view-memory');
   el.innerHTML = '<p class="explore-title display">\ud83e\udde0 Memory</p>';
@@ -2321,6 +2366,36 @@ function renderMemory(){
       el.appendChild(row);
     });
   }
+
+  const collTitle = document.createElement('p'); collTitle.style.fontWeight='700'; collTitle.style.margin='1.3rem 0 0.6rem'; collTitle.textContent = 'Your Collection';
+  el.appendChild(collTitle);
+  const bankValues = Object.values(state.memoryBank);
+  RARITY_TIERS.forEach(tier=>{
+    const items = bankValues.filter(m=>m.rarity===tier);
+    const collected = state.collectedTiers.includes(tier);
+    const streak = state.rarityStreak[tier]||0;
+    const box = document.createElement('div'); box.style.marginBottom='0.6rem'; box.style.background='var(--surface)'; box.style.border='1px solid var(--border)'; box.style.borderRadius='14px'; box.style.overflow='hidden';
+    const head = document.createElement('div'); head.style.padding='0.8rem 1rem'; head.style.display='flex'; head.style.justifyContent='space-between'; head.style.alignItems='center'; head.style.cursor='pointer';
+    head.innerHTML = '<span style="font-weight:700;color:'+RARITY_COLOR[tier]+'">'+tier+' ('+items.length+')</span><span style="font-size:0.78rem;color:var(--text-soft)">'+(collected?'\u2713 Collected':streak+'/3 to collect')+'</span>';
+    head.onclick = ()=>{ expandedRarityTier = expandedRarityTier===tier ? null : tier; renderMemory(); };
+    box.appendChild(head);
+    if(expandedRarityTier===tier){
+      if(items.length===0){
+        const p = document.createElement('p'); p.style.padding='0 1rem 0.8rem'; p.style.color='var(--text-soft)'; p.style.fontSize='0.82rem'; p.style.margin='0'; p.textContent = 'No '+tier.toLowerCase()+' concepts yet.';
+        box.appendChild(p);
+      } else {
+        items.sort((a,b)=>b.mastery-a.mastery).forEach(it=>{
+          const row = document.createElement('div'); row.style.padding='0.5rem 1rem'; row.style.borderTop='1px solid var(--border)'; row.style.display='flex'; row.style.justifyContent='space-between'; row.style.fontSize='0.85rem';
+          row.innerHTML = '<span>'+it.term+'</span><span style="color:var(--text-soft)">'+stageOf(it.mastery)+' \u00b7 '+it.mastery+'%</span>';
+          box.appendChild(row);
+        });
+      }
+      const note = document.createElement('p'); note.style.padding='0.6rem 1rem 0.8rem'; note.style.fontSize='0.76rem'; note.style.color='var(--text-soft)'; note.style.margin='0';
+      note.textContent = collected ? 'Permanently collected \u2014 nice.' : 'Answer 3 '+tier.toLowerCase()+' cards correctly in a row (Memory review, Challenge, or Home) to collect this tier.';
+      box.appendChild(note);
+    }
+    el.appendChild(box);
+  });
 
   const now = Date.now();
   const tomorrow = Object.values(state.memoryBank).filter(m=>m.nextReview>now && m.nextReview<=now+86400000).length;
