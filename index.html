@@ -552,6 +552,7 @@ function bumpAffinity(category, amount){ if(!category) return; state.affinity[ca
 function bumpInteraction(){
   state.interactionCount += 1;
   persist('interaction-count', state.interactionCount);
+  persist('last-active-at', Date.now());
 }
 function recordAnswer(correct){
   state.recentAnswers.push(!!correct);
@@ -825,13 +826,13 @@ async function callClaude(system, userText, maxTokens){
   const body = JSON.stringify({ model:"claude-sonnet-5", max_tokens: maxTokens || 1000, system: system, messages:[{role:"user", content:userText}] });
   let primaryErr = null;
   try{
-    const r = await fetchWithTimeout('/.netlify/functions/claude', { method:"POST", headers:{"Content-Type":"application/json"}, body }, 20000);
+    const r = await fetchWithTimeout('/.netlify/functions/claude', { method:"POST", headers:{"Content-Type":"application/json"}, body }, 30000);
     const data = await r.json().catch(()=>null);
     if(r.ok && data){
       return (data.content||[]).map(b=>b.text||"").join("\n");
     }
     primaryErr = (data && data.error && (data.error.message || JSON.stringify(data.error))) || ('HTTP '+r.status);
-  }catch(e){ primaryErr = e.name==='AbortError' ? 'Request timed out after 20s (function may be cold-starting or hanging)' : e.message; }
+  }catch(e){ primaryErr = e.name==='AbortError' ? 'Request timed out after 30s (function may be cold-starting or under heavy load)' : e.message; }
   try{
     const response = await fetchWithTimeout("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body }, 8000);
     const data2 = await response.json().catch(()=>null);
@@ -1036,49 +1037,55 @@ async function fetchTargeted(type, topicHint, fromHook){
   return card;
 }
 
-async function loadMore(){
+async function loadMore(count, includeExtras){
   if(state.loading) return;
+  count = count || 3;
+  includeExtras = includeExtras===undefined ? true : includeExtras;
   state.loading = true;
   renderHome();
   renderHomeSkeleton(true);
   try{
-    const due = dueReviews(2).filter(item => !state.feed.some(c=>c.type==='review' && c.memKey===normKey(item.term)));
-    const reviewCardPromises = due.map(item => fetchReviewPrompt(item).then(promptData=>({
-      id: uid(), type:'review', memKey: normKey(item.term), term:item.term, category:item.category,
-      mastery:item.mastery, rarity:item.rarity, promptData
-    })).catch(()=>null));
+    let reviewCardPromises = [], connectPromise = Promise.resolve(null), synthesisPromise = Promise.resolve(null), applicationPromise = Promise.resolve(null), pendingRecallPromise = Promise.resolve(null);
 
-    const alreadyHasConnect = state.feed.some(c=>c.type==='connect');
-    const pair = (!alreadyHasConnect && Math.random()<0.35) ? findConnectPair() : null;
-    const connectPromise = pair ? fetchConnectPrompt(pair.itemA, pair.itemB).then(promptData=>({
-      id: uid(), type:'connect', keyA: pair.itemA.key, keyB: pair.itemB.key,
-      termA: pair.itemA.term, termB: pair.itemB.term, category: pair.itemA.category, promptData
-    })).catch(()=>null) : Promise.resolve(null);
+    if(includeExtras){
+      const due = dueReviews(2).filter(item => !state.feed.some(c=>c.type==='review' && c.memKey===normKey(item.term)));
+      reviewCardPromises = due.map(item => fetchReviewPrompt(item).then(promptData=>({
+        id: uid(), type:'review', memKey: normKey(item.term), term:item.term, category:item.category,
+        mastery:item.mastery, rarity:item.rarity, promptData
+      })).catch(()=>null));
 
-    const alreadyHasSynthesis = state.feed.some(c=>c.type==='create' && c.concept);
-    const bankValues = Object.values(state.memoryBank);
-    const synthesisConcept = (!alreadyHasSynthesis && bankValues.length>0 && Math.random()<0.3) ? bankValues[Math.floor(Math.random()*bankValues.length)] : null;
-    const synthesisPromise = synthesisConcept ? fetchTargeted('create', 'a Writing, Design, Music, Storytelling, Photography, or Innovation task that applies this specific concept the learner already knows: "'+synthesisConcept.term+'" ('+synthesisConcept.definition+')', '').catch(()=>null) : Promise.resolve(null);
+      const alreadyHasConnect = state.feed.some(c=>c.type==='connect');
+      const pair = (!alreadyHasConnect && Math.random()<0.35) ? findConnectPair() : null;
+      connectPromise = pair ? fetchConnectPrompt(pair.itemA, pair.itemB).then(promptData=>({
+        id: uid(), type:'connect', keyA: pair.itemA.key, keyB: pair.itemB.key,
+        termA: pair.itemA.term, termB: pair.itemB.term, category: pair.itemA.category, promptData
+      })).catch(()=>null) : Promise.resolve(null);
 
-    const alreadyHasApplication = state.feed.some(c=>c.appliesConceptKey);
-    const applyCandidates = bankValues.filter(m=>m.mastery<100);
-    const applyItem = (!alreadyHasApplication && applyCandidates.length>0 && Math.random()<0.35) ? applyCandidates[Math.floor(Math.random()*applyCandidates.length)] : null;
-    const applyType = ['trivia','mystery','versus'][Math.floor(Math.random()*3)];
-    const applicationPromise = applyItem ? fetchTargeted(applyType, 'a question that requires the learner to APPLY or IDENTIFY this concept in a new, different situation \u2014 not just define it: "'+applyItem.term+'" ('+applyItem.definition+')', '').then(card=>{
-      card.appliesConceptKey = normKey(applyItem.term);
-      card.appliesConceptTerm = applyItem.term;
-      return card;
-    }).catch(()=>null) : Promise.resolve(null);
+      const alreadyHasSynthesis = state.feed.some(c=>c.type==='create' && c.concept);
+      const bankValues = Object.values(state.memoryBank);
+      const synthesisConcept = (!alreadyHasSynthesis && bankValues.length>0 && Math.random()<0.3) ? bankValues[Math.floor(Math.random()*bankValues.length)] : null;
+      synthesisPromise = synthesisConcept ? fetchTargeted('create', 'a Writing, Design, Music, Storytelling, Photography, or Innovation task that applies this specific concept the learner already knows: "'+synthesisConcept.term+'" ('+synthesisConcept.definition+')', '').catch(()=>null) : Promise.resolve(null);
 
-    const alreadyHasPendingRecall = state.feed.some(c=>c.type==='pendingRecall');
-    const eligiblePending = Object.entries(state.pendingKnowledge).filter(([k,item])=> (state.interactionCount - item.addedAt) >= item.dueIn);
-    const pendingItem = (!alreadyHasPendingRecall && eligiblePending.length>0) ? {key:eligiblePending[0][0], ...eligiblePending[0][1]} : null;
-    const pendingRecallPromise = pendingItem ? fetchPendingRecallPrompt(pendingItem).then(promptData=>({
-      id: uid(), type:'pendingRecall', pendingKey: pendingItem.key, term: pendingItem.term, category: pendingItem.category,
-      definition: pendingItem.definition, rarity: pendingItem.rarity, promptData
-    })).catch(()=>null) : Promise.resolve(null);
+      const alreadyHasApplication = state.feed.some(c=>c.appliesConceptKey);
+      const applyCandidates = bankValues.filter(m=>m.mastery<100);
+      const applyItem = (!alreadyHasApplication && applyCandidates.length>0 && Math.random()<0.35) ? applyCandidates[Math.floor(Math.random()*applyCandidates.length)] : null;
+      const applyType = ['trivia','mystery','versus'][Math.floor(Math.random()*3)];
+      applicationPromise = applyItem ? fetchTargeted(applyType, 'a question that requires the learner to APPLY or IDENTIFY this concept in a new, different situation \u2014 not just define it: "'+applyItem.term+'" ('+applyItem.definition+')', '').then(card=>{
+        card.appliesConceptKey = normKey(applyItem.term);
+        card.appliesConceptTerm = applyItem.term;
+        return card;
+      }).catch(()=>null) : Promise.resolve(null);
 
-    const [cards, reviewCardsRaw, connectCard, synthesisCard, applicationCard, pendingRecallCard] = await Promise.all([fetchBatch(3), Promise.all(reviewCardPromises), connectPromise, synthesisPromise, applicationPromise, pendingRecallPromise]);
+      const alreadyHasPendingRecall = state.feed.some(c=>c.type==='pendingRecall');
+      const eligiblePending = Object.entries(state.pendingKnowledge).filter(([k,item])=> (state.interactionCount - item.addedAt) >= item.dueIn);
+      const pendingItem = (!alreadyHasPendingRecall && eligiblePending.length>0) ? {key:eligiblePending[0][0], ...eligiblePending[0][1]} : null;
+      pendingRecallPromise = pendingItem ? fetchPendingRecallPrompt(pendingItem).then(promptData=>({
+        id: uid(), type:'pendingRecall', pendingKey: pendingItem.key, term: pendingItem.term, category: pendingItem.category,
+        definition: pendingItem.definition, rarity: pendingItem.rarity, promptData
+      })).catch(()=>null) : Promise.resolve(null);
+    }
+
+    const [cards, reviewCardsRaw, connectCard, synthesisCard, applicationCard, pendingRecallCard] = await Promise.all([fetchBatch(count), Promise.all(reviewCardPromises), connectPromise, synthesisPromise, applicationPromise, pendingRecallPromise]);
     const reviewCards = reviewCardsRaw.filter(Boolean);
     if(connectCard) reviewCards.push(connectCard);
     if(synthesisCard) reviewCards.push(synthesisCard);
@@ -1209,8 +1216,8 @@ function renderHome(){
   const sentinel = document.createElement('div'); sentinel.className='sentinel'; sentinel.id='sentinel';
   el.appendChild(sentinel);
   if(state.error){
-    const errWrap = document.createElement('div'); errWrap.className='empty-full';
-    errWrap.innerHTML = '<h3>Could not load more</h3><p>'+state.error+'</p>';
+    const errWrap = document.createElement('div'); errWrap.className='empty-full'; errWrap.style.minHeight='100vh'; errWrap.style.scrollSnapAlign='start'; errWrap.style.scrollSnapStop='always';
+    errWrap.innerHTML = '<h3 style="color:var(--red)">Could not load more</h3><p style="color:var(--red)">'+state.error+'</p>';
     const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Try again'; btn.onclick = loadMore;
     errWrap.appendChild(btn);
     el.appendChild(errWrap);
@@ -2154,7 +2161,7 @@ function setupObserver(){
   if(!sentinel) return;
   const obs = new IntersectionObserver((entries)=>{
     entries.forEach(entry=>{ if(entry.isIntersecting){ obs.disconnect(); loadMore(); } });
-  }, {root:document.getElementById('view-home'), rootMargin:'600px'});
+  }, {root:document.getElementById('view-home'), rootMargin:'1400px'});
   obs.observe(sentinel);
 }
 
@@ -2547,13 +2554,38 @@ function switchView(name){
   else if(name==='home') renderHome();
 }
 
+async function maybeResetFeed(){
+  let sessionFresh = true;
+  try{ sessionFresh = !sessionStorage.getItem('fn_session_active'); }catch(e){}
+  let staleByTime = false;
+  try{
+    const r = await window.storage.get('last-active-at');
+    if(r && r.value){
+      const last = parseInt(r.value, 10);
+      if(!isNaN(last) && (Date.now() - last) > 3600000) staleByTime = true;
+    }
+  }catch(e){}
+  if(sessionFresh || staleByTime){
+    state.feed = [];
+    state.seenTitles = [];
+    await persist('feed', []);
+    await persist('seen-titles', []);
+  }
+  try{ sessionStorage.setItem('fn_session_active','1'); }catch(e){}
+  persist('last-active-at', Date.now());
+}
+
 async function init(){
   await loadStorage();
+  await maybeResetFeed();
   checkStreak();
   document.querySelectorAll('.nav-btn').forEach(b=>{ b.onclick = ()=>switchView(b.dataset.view); });
   document.getElementById('overlay-close').onclick = closeOverlay;
   renderHome();
-  if(state.feed.length===0) await loadMore();
+  if(state.feed.length===0){
+    await loadMore(1, false);
+    loadMore(2, true);
+  }
 }
 init();
 </script>
