@@ -641,7 +641,7 @@ async function checkConceptEquivalence(termA, defA, termB, defB){
   try{
     const system = "Return ONLY raw JSON: {\"same\": boolean}. Decide whether these two labels refer to the same underlying concept (just worded differently), not merely a related idea.";
     const user = 'Concept A: "'+termA+'" ('+defA+'). Concept B: "'+termB+'" ('+defB+').';
-    const raw = await callClaude(system, user, 100);
+    const raw = await callClaude(system, user, 100, HAIKU);
     return JSON.parse(stripFence(raw)).same===true;
   }catch(e){ return false; }
 }
@@ -844,8 +844,11 @@ function timeoutRejection(ms){
 async function fetchWithTimeout(url, options, ms){
   return Promise.race([ fetch(url, options), timeoutRejection(ms) ]);
 }
-async function callClaudeInner(system, userText, maxTokens){
-  const body = JSON.stringify({ model:"claude-sonnet-5", max_tokens: maxTokens || 1000, system: system, messages:[{role:"user", content:userText}] });
+async function callClaudeInner(system, userText, maxTokens, model){
+  const systemField = Array.isArray(system)
+    ? system.filter(p=>p.text).map(p=> p.cache ? {type:"text", text:p.text, cache_control:{type:"ephemeral"}} : {type:"text", text:p.text})
+    : system;
+  const body = JSON.stringify({ model: model || "claude-sonnet-5", max_tokens: maxTokens || 1000, system: systemField, messages:[{role:"user", content:userText}] });
   let primaryErr = null;
   for(let attempt=0; attempt<2; attempt++){
     try{
@@ -874,12 +877,13 @@ async function callClaudeInner(system, userText, maxTokens){
   }
 }
 let networkQueue = Promise.resolve();
-function callClaude(system, userText, maxTokens){
-  const task = () => callClaudeInner(system, userText, maxTokens);
+function callClaude(system, userText, maxTokens, model){
+  const task = () => callClaudeInner(system, userText, maxTokens, model);
   const run = networkQueue.then(task, task);
   networkQueue = run.then(()=>{}, ()=>{});
   return run;
 }
+const HAIKU = "claude-haiku-4-5-20251001";
 function stripFence(text){ return text.replace(/```json/gi,"").replace(/```/g,"").trim(); }
 function extractJsonArray(text){
   const start = text.indexOf('['); const end = text.lastIndexOf(']');
@@ -1073,7 +1077,10 @@ function typeInstruction(){
 async function fetchBatch(count){
   const recentTitles = state.seenTitles.slice(-40).join('; ');
   const recentCats = state.recentCategories.slice(-14).join(', ');
-  const system = SHARED_SYSTEM_INTRO + CARD_SHAPES + "\n\nFor French cards, follow this CEFR calibration exactly: "+DIFF_PROMPT[state.frenchLevel]+" Always set \"difficulty\" to \""+state.frenchLevel+"\".";
+  const system = [
+    {text: SHARED_SYSTEM_INTRO + CARD_SHAPES, cache:true},
+    {text: "\n\nFor French cards, follow this CEFR calibration exactly: "+DIFF_PROMPT[state.frenchLevel]+" Always set \"difficulty\" to \""+state.frenchLevel+"\"."}
+  ];
   const implicitPrefs = topAffinities(3);
   const prefHint = implicitPrefs.length ? " The learner has recently engaged with: "+implicitPrefs.join(', ')+" \u2014 that's a weak, secondary signal only. Variety and genuine breadth matter far more than matching it: at most 1 in 4 cards should lean toward these, and never let it justify repeating the same narrow sub-topic." : "";
   const catHint = recentCats ? " Recently covered categories/subjects (actively AVOID repeating these or close variants \u2014 go somewhere genuinely different): "+recentCats+"." : "";
@@ -1089,7 +1096,7 @@ async function fetchBatch(count){
   });
 }
 async function fetchTargeted(type, topicHint, fromHook){
-  const system = SHARED_SYSTEM_INTRO + CARD_SHAPES;
+  const system = [{text: SHARED_SYSTEM_INTRO + CARD_SHAPES, cache:true}];
   const recentCats = state.recentCategories.slice(-14).join(', ');
   const catHint = recentCats ? " Recently covered categories/subjects (avoid repeating these if this topic allows a different angle): "+recentCats+"." : "";
   const user = "Generate exactly 1 card of type: "+type+". It should be about or dive deeper into: \""+topicHint+"\""+(fromHook?(" following on from this earlier idea: \""+fromHook+"\""):"")+"."+catHint+" Never repeat any of these already-used words or titles: "+(state.seenTitles.slice(-40).join('; ')||'none yet')+".";
