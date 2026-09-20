@@ -81,6 +81,7 @@
   }
   textarea:focus{ outline:none; border-color:var(--purple); }
   textarea:disabled{ opacity:0.75; }
+  input, textarea, select{ font-size:max(1rem, 16px) !important; }
   .prompt-line{ font-size:1rem; color:var(--text-soft); font-weight:500; margin:0 0 0.7rem; }
   .feedback{ margin-top:0.7rem; padding:0.9rem 1rem; border-radius:14px; background:var(--surface-2); font-size:1rem; line-height:1.55; color:var(--text); border-left:3px solid var(--gold); }
   .feedback .corrected{ font-weight:700; margin-bottom:0.3rem; color:var(--gold); }
@@ -180,7 +181,7 @@
   .create-title{ font-family:'Poppins',sans-serif; font-size:1.3rem; font-weight:700; margin:0.3rem 0 0.4rem; }
   .create-sub{ color:var(--text-soft); font-size:0.88rem; margin:0 0 1.2rem; }
   #create-input{
-    width:100%; min-height:70px; font-family:'Inter',sans-serif; font-size:0.98rem; color:var(--text);
+    width:100%; min-height:70px; font-family:'Inter',sans-serif; font-size:1.05rem; color:var(--text);
     background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:0.8rem 0.9rem; margin-bottom:1rem;
   }
   .create-type-row{ display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.2rem; }
@@ -494,7 +495,7 @@ function bumpDaily(field){
 }
 
 function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); }
-function levelOf(xp){ return Math.floor(xp/150)+1; }
+function levelOf(xp){ return Math.floor(xp/260)+1; }
 function xpIntoLevel(xp){ return xp % 150; }
 const KNOWLEDGE_MAP = [
   {id:'French', color:'var(--blue)', match:['french']},
@@ -682,7 +683,7 @@ async function addToMemoryBank(term, category, definition, rarity, startMastery)
   if(state.memoryBank[key]) return;
   state.memoryBank[key] = {
     term, category: category||'General', definition, rarity: rarity||'Common', aliases:[],
-    mastery: startMastery||15, intervalIndex: 0, nextReview: Date.now() + MEM_INTERVALS[0]*86400000,
+    mastery: startMastery||15, intervalIndex: 0, nextReview: Date.now() + MEM_INTERVALS[0]*86400000 + Math.floor(Math.random()*8*3600000),
     createdAt: Date.now(), timesReviewed: 0, masteredCelebrated:false, perfectedCelebrated:false,
   };
   persist('memory-bank', state.memoryBank);
@@ -825,7 +826,9 @@ function applyReviewResult(item, verdict){
     state.memoryStats.forgotten += 1;
   }
   item.timesReviewed += 1;
-  item.nextReview = Date.now() + MEM_INTERVALS[item.intervalIndex]*86400000;
+  const intervalMs = MEM_INTERVALS[item.intervalIndex]*86400000;
+  const jitterMs = (Math.random()-0.5) * 0.3 * intervalMs;
+  item.nextReview = Date.now() + intervalMs + jitterMs;
   if(item.mastery>=100 && !item.perfectedCelebrated){
     item.perfectedCelebrated = true; item.masteredCelebrated = true;
     state.xp += 80; persistProgress();
@@ -1191,7 +1194,12 @@ async function fetchOneBonusCard(){
     if(card){
       state.feed.push(card);
       persist('feed', state.feed.slice(-80));
-      if(state.view==='home' && !state.overlayView && !state.loading) renderHome();
+      const activeEl = document.activeElement;
+      const userIsTyping = activeEl && (activeEl.tagName==='TEXTAREA' || activeEl.tagName==='INPUT');
+      if(state.view==='home' && !state.overlayView && !state.loading){
+        if(!userIsTyping) renderHome();
+        else activeEl.addEventListener('blur', ()=>{ if(state.view==='home' && !state.overlayView && !state.loading) renderHome(); }, {once:true});
+      }
       return true;
     }
     return false;
