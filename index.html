@@ -1139,7 +1139,7 @@ async function loadMore(count, includeExtras){
   count = count || 2;
   includeExtras = includeExtras===undefined ? true : includeExtras;
   state.loading = true;
-  renderHome();
+  safeRenderHome();
   try{
     const cards = await fetchBatch(count);
     state.feed = state.feed.concat(cards);
@@ -1150,7 +1150,7 @@ async function loadMore(count, includeExtras){
     state.error = null;
   }catch(e){ state.error = (e && e.message) ? e.message : 'Could not load new cards.'; }
   state.loading = false;
-  renderHome();
+  safeRenderHome();
   if(includeExtras && !state.error) fetchBonusCardsSequential(2);
 }
 
@@ -1194,12 +1194,7 @@ async function fetchOneBonusCard(){
     if(card){
       state.feed.push(card);
       persist('feed', state.feed.slice(-80));
-      const activeEl = document.activeElement;
-      const userIsTyping = activeEl && (activeEl.tagName==='TEXTAREA' || activeEl.tagName==='INPUT');
-      if(state.view==='home' && !state.overlayView && !state.loading){
-        if(!userIsTyping) renderHome();
-        else activeEl.addEventListener('blur', ()=>{ if(state.view==='home' && !state.overlayView && !state.loading) renderHome(); }, {once:true});
-      }
+      if(state.view==='home' && !state.overlayView && !state.loading) safeRenderHome();
       return true;
     }
     return false;
@@ -1278,8 +1273,18 @@ function renderMissionHero(){
   return wrap;
 }
 
+function safeRenderHome(){
+  const activeEl = document.activeElement;
+  const userIsTyping = activeEl && (activeEl.tagName==='TEXTAREA' || activeEl.tagName==='INPUT');
+  if(!userIsTyping){ renderHome(); return; }
+  if(!activeEl.dataset.pendingRerenderBound){
+    activeEl.dataset.pendingRerenderBound = '1';
+    activeEl.addEventListener('blur', ()=>{ renderHome(); }, {once:true});
+  }
+}
 function renderHome(){
   const el = document.getElementById('view-home');
+  const prevScrollTop = el.scrollTop;
   el.innerHTML = '';
   const topbar = document.createElement('div'); topbar.className='home-topbar';
   const label = document.createElement('div'); label.className='home-label';
@@ -1337,6 +1342,7 @@ function renderHome(){
     requestAnimationFrame(()=>{ loadWrap.scrollIntoView({behavior:'smooth', block:'start'}); });
   }
   setupObserver();
+  if(state.feed.length>0 && prevScrollTop>0){ el.scrollTop = prevScrollTop; }
 }
 
 function typeColors(card){ return TYPE_COLORS[card.type] || TYPE_COLORS.knowledge; }
