@@ -557,8 +557,8 @@ async function triggerBossBattle(domain){
     card.rarity = 'Legendary';
     state.feed.push(card);
     persist('feed', state.feed.slice(-80));
-    if(state.view==='home'){
-      renderHome();
+    if(state.view==='home' && !state.overlayView){
+      appendNewCards([card]);
       requestAnimationFrame(()=>{
         const cards = document.querySelectorAll('.snap-card');
         const last = cards[cards.length-1];
@@ -1138,8 +1138,9 @@ async function loadMore(count, includeExtras){
   if(state.loading) return;
   count = count || 2;
   includeExtras = includeExtras===undefined ? true : includeExtras;
+  const hadCards = state.feed.length>0;
   state.loading = true;
-  safeRenderHome();
+  if(hadCards){ if(state.view==='home' && !state.overlayView) appendTrailingLoading(); } else { safeRenderHome(); }
   try{
     const cards = await fetchBatch(count);
     state.feed = state.feed.concat(cards);
@@ -1148,9 +1149,13 @@ async function loadMore(count, includeExtras){
     persist('feed', state.feed.slice(-80));
     persist('seen-titles', state.seenTitles);
     state.error = null;
-  }catch(e){ state.error = (e && e.message) ? e.message : 'Could not load new cards.'; }
-  state.loading = false;
-  safeRenderHome();
+    state.loading = false;
+    if(hadCards){ if(state.view==='home' && !state.overlayView) appendNewCards(cards); } else { safeRenderHome(); }
+  }catch(e){
+    state.error = (e && e.message) ? e.message : 'Could not load new cards.';
+    state.loading = false;
+    if(hadCards){ if(state.view==='home' && !state.overlayView) appendTrailingError(state.error); } else { safeRenderHome(); }
+  }
   if(includeExtras && !state.error) fetchBonusCardsSequential(2);
 }
 
@@ -1194,7 +1199,7 @@ async function fetchOneBonusCard(){
     if(card){
       state.feed.push(card);
       persist('feed', state.feed.slice(-80));
-      if(state.view==='home' && !state.overlayView && !state.loading) safeRenderHome();
+      if(state.view==='home' && !state.overlayView && !state.loading) appendNewCards([card]);
       return true;
     }
     return false;
@@ -1282,9 +1287,38 @@ function safeRenderHome(){
     activeEl.addEventListener('blur', ()=>{ renderHome(); }, {once:true});
   }
 }
+function clearTrailingBlocks(el){
+  const sentinel = document.getElementById('sentinel'); if(sentinel) sentinel.remove();
+  const skeleton = document.getElementById('home-skeleton'); if(skeleton) skeleton.remove();
+  const errBlock = el.querySelector('.trailing-error-block'); if(errBlock) errBlock.remove();
+}
+function appendTrailingLoading(){
+  const el = document.getElementById('view-home');
+  clearTrailingBlocks(el);
+  const loadWrap = document.createElement('div'); loadWrap.className='empty-full'; loadWrap.style.minHeight='100vh'; loadWrap.style.scrollSnapAlign='start'; loadWrap.style.scrollSnapStop='always'; loadWrap.id='home-skeleton';
+  loadWrap.innerHTML = '<div class="spinner"></div><h3 style="margin-top:1rem">Loading more\u2026</h3><p>This can take up to 30 seconds.</p>';
+  el.appendChild(loadWrap);
+}
+function appendTrailingError(msg){
+  const el = document.getElementById('view-home');
+  clearTrailingBlocks(el);
+  const errWrap = document.createElement('div'); errWrap.className='empty-full trailing-error-block'; errWrap.style.minHeight='100vh'; errWrap.style.scrollSnapAlign='start'; errWrap.style.scrollSnapStop='always';
+  errWrap.innerHTML = '<h3 style="color:var(--red)">Could not load more</h3><p style="color:var(--red)">'+msg+'</p>';
+  const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Try again';
+  btn.onclick = ()=>{ state.error = null; loadMore(); };
+  errWrap.appendChild(btn);
+  el.appendChild(errWrap);
+}
+function appendNewCards(cards){
+  const el = document.getElementById('view-home');
+  clearTrailingBlocks(el);
+  cards.forEach(card=>el.appendChild(buildSnapCard(card)));
+  const sentinel = document.createElement('div'); sentinel.className='sentinel'; sentinel.id='sentinel';
+  el.appendChild(sentinel);
+  setupObserver();
+}
 function renderHome(){
   const el = document.getElementById('view-home');
-  const prevScrollTop = el.scrollTop;
   el.innerHTML = '';
   const topbar = document.createElement('div'); topbar.className='home-topbar';
   const label = document.createElement('div'); label.className='home-label';
@@ -1328,21 +1362,7 @@ function renderHome(){
   state.feed.forEach(card=>el.appendChild(buildSnapCard(card)));
   const sentinel = document.createElement('div'); sentinel.className='sentinel'; sentinel.id='sentinel';
   el.appendChild(sentinel);
-  if(state.error){
-    const errWrap = document.createElement('div'); errWrap.className='empty-full'; errWrap.style.minHeight='100vh'; errWrap.style.scrollSnapAlign='start'; errWrap.style.scrollSnapStop='always';
-    errWrap.innerHTML = '<h3 style="color:var(--red)">Could not load more</h3><p style="color:var(--red)">'+state.error+'</p>';
-    const btn = document.createElement('button'); btn.className='primary'; btn.textContent='Try again';
-    btn.onclick = ()=>{ state.error = null; loadMore(); };
-    errWrap.appendChild(btn);
-    el.appendChild(errWrap);
-  } else if(state.loading){
-    const loadWrap = document.createElement('div'); loadWrap.className='empty-full'; loadWrap.style.minHeight='100vh'; loadWrap.style.scrollSnapAlign='start'; loadWrap.style.scrollSnapStop='always'; loadWrap.id='home-skeleton';
-    loadWrap.innerHTML = '<div class="spinner"></div><h3 style="margin-top:1rem">Loading more\u2026</h3><p>This can take up to 30 seconds.</p>';
-    el.appendChild(loadWrap);
-    requestAnimationFrame(()=>{ loadWrap.scrollIntoView({behavior:'smooth', block:'start'}); });
-  }
   setupObserver();
-  if(state.feed.length>0 && prevScrollTop>0){ el.scrollTop = prevScrollTop; }
 }
 
 function typeColors(card){ return TYPE_COLORS[card.type] || TYPE_COLORS.knowledge; }
