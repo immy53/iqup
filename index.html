@@ -376,9 +376,9 @@ function levelTitle(lvl){ let t = LEVEL_TITLES[0].title; LEVEL_TITLES.forEach(x=
 const REVIEW_INTERVALS = [1,3,7,14,30];
 const DIFF_LABELS = {beginner:'A1\u2013A2', intermediate:'B1\u2013B2', advanced:'C1'};
 const DIFF_PROMPT = {
-  beginner: "This must match CEFR A1-A2 level exactly: use only the roughly 1000 most frequent French words. Use present tense only, or near-future with aller. Keep the example sentence very short and simple (basic subject-verb-object). No idioms, no subjunctive, no complex clauses. The practice prompt must ask for just one very short, simple sentence using the word.",
-  intermediate: "This must match CEFR B1-B2 level exactly: everyday vocabulary plus some opinion/abstract vocabulary a learner meets after 1-2 years of study. Vary the tense across cards (passe compose, imparfait, futur simple, or conditionnel). Include a light idiomatic touch where natural. The practice prompt can ask for 1-2 sentences using a specific tense or context.",
-  advanced: "This must match CEFR C1 level exactly: nuanced, literary, or formal/academic vocabulary. Use complex structures such as the subjunctive, past conditional, or nuanced connectors. Include an idiomatic or figurative expression. The practice prompt should challenge the learner to use a specific advanced structure or idiom correctly."
+  beginner: "This must match CEFR A1-A2 level exactly: use only the roughly 1000 most frequent French words. Use present tense only, or near-future with aller. Keep the example sentence very short and simple (basic subject-verb-object). No idioms, no subjunctive, no complex clauses. The practice prompt must ask for just one very short, simple sentence using the word. Use CANADIAN FRENCH (Québécois) as spoken in Ottawa/Quebec, not France French: everyday Canadian vocabulary and expressions (e.g. \"magasiner\" not \"faire du shopping\", \"char\" as a casual word for car, \"d\u00e9jeuner/d\u00eener/souper\" for breakfast/lunch/dinner rather than the France usage), and Canadian-French phrasing where it naturally differs.",
+  intermediate: "This must match CEFR B1-B2 level exactly: everyday vocabulary plus some opinion/abstract vocabulary a learner meets after 1-2 years of study. Vary the tense across cards (passe compose, imparfait, futur simple, or conditionnel). Include a light idiomatic touch where natural. The practice prompt can ask for 1-2 sentences using a specific tense or context. Use CANADIAN FRENCH (Québécois) as spoken in Ottawa/Quebec, not France French: everyday Canadian vocabulary, expressions, and casual idioms (e.g. \"magasiner\", \"char\", \"d\u00e9jeuner/d\u00eener/souper\" for breakfast/lunch/dinner), reflecting how it's actually spoken day-to-day in Ontario/Quebec.",
+  advanced: "This must match CEFR C1 level exactly: nuanced, literary, or formal/academic vocabulary. Use complex structures such as the subjunctive, past conditional, or nuanced connectors. Include an idiomatic or figurative expression. The practice prompt should challenge the learner to use a specific advanced structure or idiom correctly. Where regional vocabulary would naturally appear even at this formal level, prefer Canadian French usage over France French."
 };
 
 const EXPLORE_TILES = [
@@ -397,9 +397,9 @@ const DOMAIN_GLOW = {};
 EXPLORE_TILES.forEach(t=>{ if(t.id.startsWith('domain:')) DOMAIN_GLOW[t.id.slice(7)] = t.glow; });
 
 const DOMAIN_TOPIC_LIST = {
-  Money: 'personal finance, investing, economics, business, entrepreneurship, careers, negotiation, marketing, wealth, real estate',
+  Money: 'personal finance, investing, economics, business, entrepreneurship, careers, negotiation, marketing, wealth, real estate, skilled trades and how they work as a career/business (electricians, plumbers, welders, construction), oil and gas/energy markets (how crude oil pricing works, OPEC, refining, pipelines, why gas prices move), supply chains and commodities',
   Human: 'psychology, biology, neuroscience, health, behavior, relationships, habits, communication, emotions',
-  World: 'history, geography, countries, politics, government, culture, civilization, conflict',
+  World: 'history, geography, countries, culture, civilization, conflict, and politics/government covered factually and neutrally (never persuasive or one-sided): general political literacy \u2014 the political spectrum and what left/right/center actually mean, major ideologies (conservatism, liberalism, socialism, libertarianism, etc.) explained fairly, types of government (democracy, authoritarianism, monarchy, theocracy, federal vs unitary systems), how elections and voting systems work in general (first-past-the-post vs proportional representation, primaries, referendums), international organizations and their actual function (UN, NATO, EU, WTO, G7/G20), major global geopolitical dynamics and relationships between countries, human rights and civil liberties frameworks; grounded specifically in how the Canadian federal/provincial system works (Parliament, the PM, minority vs majority governments, the provinces) and the major Canadian federal parties, and how the US federal/state system works (Congress, the President, the courts, checks and balances) and the major US parties \u2014 platforms and history presented evenhandedly for both',
   'How it works': 'physics, chemistry, engineering, technology, space, AI, medicine, architecture, machines',
   Think: 'philosophy, logic, critical thinking, decision-making, ethics, cognitive biases, problem-solving, debate, reasoning',
   Skills: 'communication, public speaking, negotiation, writing, sales, leadership, learning how to learn, productivity, memory, time management',
@@ -1333,8 +1333,10 @@ function renderHome(){
     });
     topbar.appendChild(row);
   }
-  el.appendChild(topbar);
-  el.appendChild(renderMissionHero());
+  const topWrap = document.createElement('div'); topWrap.style.scrollSnapAlign='start'; topWrap.style.minHeight='100vh'; topWrap.style.display='flex'; topWrap.style.flexDirection='column';
+  topWrap.appendChild(topbar);
+  topWrap.appendChild(renderMissionHero());
+  el.appendChild(topWrap);
 
   if(state.feed.length===0){
     const empty = document.createElement('div'); empty.className='empty-full';
